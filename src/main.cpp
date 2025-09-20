@@ -12,7 +12,7 @@ WebServer server(80);
 BleMouse bleMouse("ESP32 Scroll Mouse", "MyCompany", 100);
 
 // 改进的 HTML 页面
-const char* htmlPage = R"rawliteral(
+const char *htmlPage = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
@@ -209,14 +209,45 @@ const char* htmlPage = R"rawliteral(
         </div>
 
         <div class="auto-mode">
+            <h3>⚙️ 滚动设置</h3>
+            <div class="speed-control">
+                <span>手动滑动速度:</span>
+                <input type="range" class="speed-slider" id="manualSpeedSlider" min="50" max="10000" value="100">
+                <span id="manualSpeedValue">100ms</span>
+            </div>
+            <div class="speed-control">
+                <span>自动滚动速度:</span>
+                <input type="range" class="speed-slider" id="speedSlider" min="100" max="10000" value="500">
+                <span id="speedValue">500ms</span>
+            </div>
+            <div class="speed-control">
+                <span>随机抖动 (手动):</span>
+                <input type="range" class="speed-slider" id="jitterSlider" min="0" max="50" value="20">
+                <span id="jitterValue">20%</span>
+            </div>
+            <div class="speed-control">
+                <span>随机抖动 (自动):</span>
+                <input type="range" class="speed-slider" id="autoJitterSlider" min="0" max="50" value="30">
+                <span id="autoJitterValue">30%</span>
+            </div>
+        </div>
+
+        <div class="auto-mode">
             <h3>🤖 自动滚动模式</h3>
             <div class="auto-controls">
                 <button class="toggle-btn start" id="autoBtn" onclick="toggleAuto()">启动自动滚动</button>
             </div>
             <div class="speed-control">
-                <span>速度:</span>
-                <input type="range" class="speed-slider" id="speedSlider" min="100" max="10000" value="500">
-                <span id="speedValue">500ms</span>
+                <span>滚动方向:</span>
+                <select id="directionSelect" style="flex: 1; padding: 8px; border-radius: 10px; background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3);">
+                    <option value="random" style="background: rgba(100,100,100,0.9); color: white;">🎲 随机方向</option>
+                    <option value="down" style="background: rgba(100,100,100,0.9); color: white;">⬇️ 向下</option>
+                    <option value="up" style="background: rgba(100,100,100,0.9); color: white;">⬆️ 向上</option>
+                    <option value="left" style="background: rgba(100,100,100,0.9); color: white;">⬅️ 向左</option>
+                    <option value="right" style="background: rgba(100,100,100,0.9); color: white;">➡️ 向右</option>
+                    <option value="vertical" style="background: rgba(100,100,100,0.9); color: white;">↕️ 上下切换</option>
+                    <option value="horizontal" style="background: rgba(100,100,100,0.9); color: white;">↔️ 左右切换</option>
+                </select>
             </div>
             <div class="auto-status" id="autoStatus">自动模式: 关闭</div>
         </div>
@@ -227,17 +258,57 @@ const char* htmlPage = R"rawliteral(
         let autoInterval = null;
         let isAutoMode = false;
         let currentAutoDirection = 'down';
+        let directionChangeCounter = 0;
+
+        function getRandomizedDelay(baseDelay, jitterPercent) {
+            const jitter = (jitterPercent / 100) * baseDelay;
+            const randomJitter = (Math.random() - 0.5) * 2 * jitter;
+            return Math.max(50, baseDelay + randomJitter);
+        }
+
+        function getNextDirection() {
+            const selectedMode = document.getElementById('directionSelect').value;
+            
+            switch(selectedMode) {
+                case 'random':
+                    const directions = ['up', 'down', 'left', 'right'];
+                    return directions[Math.floor(Math.random() * directions.length)];
+                
+                case 'vertical':
+                    return (directionChangeCounter % 2 === 0) ? 'up' : 'down';
+                
+                case 'horizontal':
+                    return (directionChangeCounter % 2 === 0) ? 'left' : 'right';
+                
+                case 'up':
+                case 'down':
+                case 'left':
+                case 'right':
+                    return selectedMode;
+                
+                default:
+                    return 'down';
+            }
+        }
 
         function startScroll(dir) {
             if (isAutoMode) return;
-            scrollInterval = setInterval(() => {
+            
+            const baseSpeed = parseInt(document.getElementById('manualSpeedSlider').value);
+            const jitterPercent = parseInt(document.getElementById('jitterSlider').value);
+            
+            function scrollWithJitter() {
                 fetch('/scroll?dir=' + dir);
-            }, 100);
+                const nextDelay = getRandomizedDelay(baseSpeed, jitterPercent);
+                scrollInterval = setTimeout(scrollWithJitter, nextDelay);
+            }
+            
+            scrollInterval = setTimeout(scrollWithJitter, baseSpeed);
         }
 
         function stopScroll() {
             if (scrollInterval) {
-                clearInterval(scrollInterval);
+                clearTimeout(scrollInterval);
                 scrollInterval = null;
             }
         }
@@ -264,21 +335,47 @@ const char* htmlPage = R"rawliteral(
         }
 
         function startAutoScroll() {
-            const speed = document.getElementById('speedSlider').value;
-            autoInterval = setInterval(() => {
+            const baseSpeed = parseInt(document.getElementById('speedSlider').value);
+            const jitterPercent = parseInt(document.getElementById('autoJitterSlider').value);
+            const selectedMode = document.getElementById('directionSelect').value;
+            
+            // 初始化方向
+            currentAutoDirection = getNextDirection();
+            document.getElementById('autoStatus').textContent = '自动模式: 运行中 - ' + currentAutoDirection;
+            
+            function autoScrollWithJitter() {
                 fetch('/scroll?dir=' + currentAutoDirection);
-                // 每10次滚动后随机改变方向
-                if (Math.random() < 0.1) {
-                    const directions = ['up', 'down', 'left', 'right'];
-                    currentAutoDirection = directions[Math.floor(Math.random() * directions.length)];
+                directionChangeCounter++;
+                
+                // 根据选择的模式决定何时改变方向
+                let shouldChangeDirection = false;
+                
+                if (selectedMode === 'random') {
+                    // 随机模式：每10次滚动后有10%概率改变方向
+                    shouldChangeDirection = Math.random() < 0.1;
+                } else if (selectedMode === 'vertical' || selectedMode === 'horizontal') {
+                    // 切换模式：每5次滚动后改变方向
+                    shouldChangeDirection = directionChangeCounter % 5 === 0;
+                }
+                // 固定方向模式不改变方向
+                
+                if (shouldChangeDirection) {
+                    currentAutoDirection = getNextDirection();
                     document.getElementById('autoStatus').textContent = '自动模式: 运行中 - ' + currentAutoDirection;
                 }
-            }, parseInt(speed));
+                
+                const nextDelay = getRandomizedDelay(baseSpeed, jitterPercent);
+                if (isAutoMode) {
+                    autoInterval = setTimeout(autoScrollWithJitter, nextDelay);
+                }
+            }
+            
+            autoInterval = setTimeout(autoScrollWithJitter, baseSpeed);
         }
 
         function stopAutoScroll() {
             if (autoInterval) {
-                clearInterval(autoInterval);
+                clearTimeout(autoInterval);
                 autoInterval = null;
             }
         }
@@ -291,12 +388,37 @@ const char* htmlPage = R"rawliteral(
             });
         }
 
-        // 速度滑块更新
+        // 滑块更新事件
+        document.getElementById('manualSpeedSlider').addEventListener('input', function() {
+            document.getElementById('manualSpeedValue').textContent = this.value + 'ms';
+        });
+
+        document.getElementById('jitterSlider').addEventListener('input', function() {
+            document.getElementById('jitterValue').textContent = this.value + '%';
+        });
+
         document.getElementById('speedSlider').addEventListener('input', function() {
             document.getElementById('speedValue').textContent = this.value + 'ms';
             if (isAutoMode) {
                 stopAutoScroll();
                 startAutoScroll();
+            }
+        });
+
+        document.getElementById('autoJitterSlider').addEventListener('input', function() {
+            document.getElementById('autoJitterValue').textContent = this.value + '%';
+            if (isAutoMode) {
+                stopAutoScroll();
+                startAutoScroll();
+            }
+        });
+
+        // 方向选择器事件
+        document.getElementById('directionSelect').addEventListener('change', function() {
+            directionChangeCounter = 0; // 重置计数器
+            if (isAutoMode) {
+                currentAutoDirection = getNextDirection();
+                document.getElementById('autoStatus').textContent = '自动模式: 运行中 - ' + currentAutoDirection;
             }
         });
 
